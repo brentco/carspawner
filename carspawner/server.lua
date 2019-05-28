@@ -149,8 +149,12 @@ end
 
 function StartScheduledCheck()
     Citizen.CreateThread(function()
-        --print("Running check")
         while true do
+            if GetFirstAvailablePlayer() ~= nil and not hasLoaded then
+                DebugLine("Loading definitions since first player is available")
+                hasLoaded = true
+                LoadDefinitions()
+            end
             for i = 1, #spawnedCarMap do
                 local spawnData = spawnedCarMap[i]
                 --print("Checking " .. spawnData.definition.vehicleName)
@@ -183,16 +187,6 @@ AddEventHandler("carspawner:vehicleOccupationCheckResult", function(handle, occu
     end
 end)
 
-AddEventHandler("playerConnecting", function(name, setKickReason, deferrals)
-    if not hasLoaded then
-        hasLoaded = true
-        LoadDefinitions()
-        StartScheduledCheck()
-    end
-end)
 
-if GetFirstAvailablePlayer() ~= nil and not hasLoaded then
-    hasLoaded = true
-    LoadDefinitions()
-    StartScheduledCheck()
-end
+StartScheduledCheck()
+
