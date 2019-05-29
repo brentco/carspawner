@@ -1,6 +1,6 @@
 RegisterNetEvent("carspawner:spawnVehicleRequest") -- spawns a vehicle commanded by the server
 RegisterNetEvent("carspawner:occupationCheckRequest") -- will check if a vehicle exists and sends the result back to the server
-
+RegisterNetEvent("playerConnected")
 function DebugLine(message)
 
 end
@@ -34,4 +34,11 @@ AddEventHandler("carspawner:occupationCheckRequest", function(requestHandle, veh
     DebugLine("Check = " .. tostring(result))
     informServerOfPresence(requestHandle, result)
 end)
+
+Citizen.CreateThread(function()
+    while true do
+      Citizen.Wait(0)
+      if NetworkIsSessionActive() then TriggerServerEvent('playerConnected') return end
+    end
+  end)
 -- #endregion
