@@ -1,7 +1,7 @@
 client_script {
     "common/dumper.lua",
     "common/logging.lua",
-    "client/client_callback.lua"
+    "client/client.lua"
 }
 
 server_script {
@@ -9,5 +9,5 @@ server_script {
     "common/logging.lua",
     "server/types.lua",
     "server/spawns.lua",
-    "server/server_callback.lua"
+    "server/server.lua"
 }

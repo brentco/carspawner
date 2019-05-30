@@ -1,65 +1,16 @@
--- Write spawns here
-local spawnDefinitions = {
-    {vehicleName = "airtug", x = -54.26639938354492, y = -1679.548828125, z = 30.4414, heading = 228.2736053466797, cooldownInSeconds = 10, occupationRadius = 10}
-}
+LOGGING_LEVEL = LogLevel.INFO
+CHECK_INTERVAL = 2000
 
--- Constants
-local ERROR = 5
-local WARN = 4
-local INFO = 3
-local DEBUG = 2
-local TRACE = 1
-
--- Script settings
-local DEBUG_LEVEL = TRACE
-
--- Do not modify
-local spawnedCarMap = {}
 local pendingRequests = {}
 local handleCounter = 0
 local chosenUserForSpawning
-local hasLoaded = false
+local players = {}
+local spawnStates = {}
 
-local players  = { }
-
-RegisterNetEvent("carspawner:vehicleOccupationCheckResult")
-
----Selects the first player found currently online to use as spawner client. If none is found, it's reset to nil.
-function selectPlayer()
-    log(LogLevel.DEBUG, "players: %s", dump(players))
-    for k, v in pairs(players) do
-        log(LogLevel.DEBUG, "select player pair: k = %s, v = %s", k, v)
-        if v ~= nil then
-            chosenUserForSpawning = k
-            return
-        end
-    end
-
-    chosenUserForSpawning = nil
-end
-
----@param level number
----@param message string
-function log(level, message)
-    if level < DEBUG_LEVEL then
-        return
-    end
-
-    local sw = {
-        [TRACE] = function(msg) print("[TRACE] " .. msg) end,
-        [DEBUG] = function(msg) print("[DEBUG] " .. msg) end,
-        [INFO] = function(msg) print("[INFO] " .. msg) end,
-        [WARN] = function(msg) print("[WARN] " .. msg) end,
-        [ERROR] = function(msg) print("[ERROR] " .. msg) end
-    }
-
-    if sw[level] ~= nil then
-        sw[level](message)
-    end
-end
+RegisterNetEvent("playerConnected")
 
 --- Gives a unique handler but restarts from 1 if it becomes too large.
-function NewHandle()
+function newHandle()
     if handleCounter >= 1000000 then
         handleCounter = 0
     end
@@ -67,90 +18,51 @@ function NewHandle()
     return handleCounter
 end
 
-function GetFirstAvailablePlayer()
-    return chosenUserForSpawning
-end
-
-function SpawnVehicle(spawnData)
-    local handle = NewHandle()
-    local def = spawnData.definition
-    local playerId = GetFirstAvailablePlayer()
-    if playerId == nil then
-        log(WARN, "Could not spawn vehicle because no players are connected.")
-        return false
-    end
-    TriggerClientEvent("carspawner:spawnVehicleRequest", playerId, handle, def.vehicleHash, def.x, def.y, def.z, def.heading)
-    return true
-end
-
-function RequestOccupationCheck(spawnData)
-    local playerId = GetFirstAvailablePlayer()
-    if playerId == nil then
-        log(WARN, "Could not request player check because no players are connected.")
-        return
-    end
-    spawnData.hasPendingCheck = true
-    local def = spawnData.definition
-    local handle = NewHandle()
-    log(TRACE, "Check request: handle = " .. handle .. ", name = " .. def.vehicleName .. ", x = " .. def.x .. ", y = ".. def.y ..", z = "..def.z..", radius = " .. def.occupationRadius)
-    TriggerClientEvent("carspawner:occupationCheckRequest", playerId, handle, def.vehicleName, def.x, def.y, def.z, def.occupationRadius)
-    pendingRequests[handle] = {spawnData = spawnData}
-end
-
-function CreateSpawn(def)
-    local spawnData = {definition = def, spawned = false, isVehicleDisplaced = false, displacedTimestamp = nil}
-    table.insert(spawnedCarMap, spawnData)
-    return spawnData
-end
-
-function GetTime()
-    return os.time(os.date("!*t"))
-end
-
-function CheckSpawn(spawnData)
-    if GetFirstAvailablePlayer() == nil then
-        log(TRACE, "No player available for spawn.")
-        return
-    end
-
-    if not spawnData.spawned then
-        log(DEBUG, "Initial spawn of vehicle " .. spawnData.definition.vehicleName)
-        spawnData.spawned = SpawnVehicle(spawnData)
-        log(DEBUG, "Success? " .. tostring(spawnData.spawned))
-        return
-    end
-
-    if spawnData.hasPendingCheck then
-        log(TRACE, "Check pending for vehicle " .. spawnData.vehicleName)
-        return
-    end
-
-    if spawnData.isVehicleDisplaced then
-        local currentTime = getTime()
-        local timeElapsedSinceDisplacement = currentTime - spawnData.displacedTimestamp
-
-        if timeElapsedSinceDisplacement >= spawnData.definition.cooldownInSeconds then
-            log(DEBUG, "Respawning vehicle " .. spawnData.definition.vehicleName)
-            local spawned = SpawnVehicle(spawnData)
-            if spawned then
-                spawnData.displacedTimestamp = nil
-                spawnData.isVehicleDisplaced = false
-            end
+---Selects the first player found currently online to use as spawner client. If none is found, it's reset to nil.
+function selectPlayer()
+    log(LogLevel.DEBUG, "players: %s", dump(players))
+    for k, v in pairs(players) do
+        if v ~= nil then
+        log(LogLevel.DEBUG, "select player pair: k = %s, v = %s", k, v)
+            chosenUserForSpawning = k
+            return
         end
     end
 
-    RequestOccupationCheck(spawnData)
+    log(LogLevel.DEBUG, "Erasing chosen player.")
+    chosenUserForSpawning = nil
 end
 
-function ProcessDefinition(def)
+RegisterNetEvent("carspawner:callback")
+AddEventHandler("carspawner:callback", function(requestHandle, success, data)
+    log(LogLevel.TRACE, "Handle: %s, success = %s, data = %s", requestHandle, success, tostring(data))
+    if pendingRequests[requestHandle] == nil then
+        log(LogLevel.DEBUG, "Received an unexpected request handle (= %s) that will be discarded. Success = %s, data = %s", requestHandle, success, dump(data))
+        return
+    end
+
+    local req = pendingRequests[requestHandle]
+    pendingRequests[requestHandle] = nil
+    if req ~= nil then
+        if success and req.successCallback ~= nil then
+            req.successCallback(data)
+        else
+            if not success and req.failureCallback ~= nil then
+                req.failureCallback(data)
+            end
+        end
+    end
+end)
+
+function processDefinition(def)
     -- Validate definition
     if def.vehicleName == nil then
-        error("Vehicle name is a required parameter.")
+        log(LogLevel.ERROR, "Vehicle name is a required parameter.")
         return
     end
 
     if def.x == nil or def.y == nil or def.z == nil then
-        error("X, Y and Z parameters are required.")
+        log(LogLevel.ERROR, "X, Y and Z parameters are required.")
         return
     end
 
@@ -166,75 +78,147 @@ function ProcessDefinition(def)
         def.occupationRadius = 10
     end
 
-    --[[if not IsModelInCdimage(def.vehicleName) or not IsModelAVehicle(def.vehicleName) then
-        error("Vehicle '" .. def.vehicleName .. "' is not a known vehicle.")
-        return
-    end]]
-
     def.vehicleHash = GetHashKey(def.vehicleName)
 
     -- Get to spawn
-    local spawnData = CreateSpawn(def)
+    local spawnState = { def = def, spawned = false, isVehicleDisplaced = false, displacedTimestamp = nil }
+    table.insert(spawnStates, spawnState)
 end
 
-function LoadDefinitions()
-    for i = 1, #spawnDefinitions do
-        ProcessDefinition(spawnDefinitions[i])
+function getTime()
+    return os.time(os.date("!*t"))
+end
+
+--cooldownTimeModifier = math.ceil(CHECK_INTERVAL / (CHECK_INTERVAL / 1000))
+
+function checkSpawn(spawnState)
+    if chosenUserForSpawning == nil then
+        log(LogLevel.TRACE, "No player available for spawn.")
+        return
+    end
+
+    performRpcCall(chosenUserForSpawning, "IsAnyVehicleNearPoint", function(occupied)
+        if not spawnState.spawned then
+            if occupied then
+                log(LogLevel.DEBUG, "Trying to spawn vehicle %s but spawn location is occupied.", spawnState.def.vehicleName)
+                performRpcCall(chosenUserForSpawning, "findClosestVehicle", function(vehId)
+                    log(LogLevel.DEBUG, "A vehicle of the same type is already present: ID = %s", vehId)
+                    spawnState.spawned = true
+                    if spawnState.def.modifier ~= nil then
+                        spawnState.def.modifier(vehId)
+                    end
+                end, function(error)
+                    log(LogLevel.ERROR, "Failed finding closest vehicle: ", error)
+                end, spawnState.def.vehicleHash, spawnState.def.x, spawnState.def.y, spawnState.def.z, spawnState.def.occupationRadius)
+                return
+            end
+            performRpcCall(chosenUserForSpawning, "spawnVehicle", function(vehicleId)
+                spawnState.spawned = true
+                if spawnState.def.modifier ~= nil then
+                    spawnState.def.modifier(vehicleId)
+                end
+            end, function(error)
+                log(LogLevel.ERROR, "Failed spawning vehicle: %s", error)
+            end, spawnState.def.vehicleHash, spawnState.def.x, spawnState.def.y, spawnState.def.z, spawnState.def.heading)
+        else
+            if not spawnState.isVehicleDisplaced and not occupied then
+                local displacementTime = getTime()
+                spawnState.chosenCooldown = math.random(spawnState.def.minCooldownInSeconds, spawnState.def.maxCooldownInSeconds)
+                log(LogLevel.DEBUG, "Vehicle '%s' was moved out of check radius. Marking as displaced since %s and will respawn in %s seconds.", spawnState.def.vehicleName, displacementTime, spawnState.chosenCooldown)
+                spawnState.isVehicleDisplaced = true
+                spawnState.displacedTimestamp = displacementTime
+            else
+                if spawnState.isVehicleDisplaced then
+                    local elapsedTime = getTime() - spawnState.displacedTimestamp
+                    local cooldown = spawnState.chosenCooldown
+                    log(LogLevel.DEBUG, "Time elapsed: %s, Cooldown: %s", elapsedTime, cooldown)
+                    if elapsedTime >= cooldown then
+                        performRpcCall(chosenUserForSpawning, "spawnVehicle", function(vehicleId)
+                            log(LogLevel.DEBUG, "Vehicle '%s' respawned", spawnState.def.vehicleName)
+                            spawnState.isVehicleDisplaced = false
+                            spawnState.displacedTimestamp = nil
+                            if spawnState.def.modifier ~= nil then
+                                spawnState.def.modifier(vehicleId)
+                            end
+                        end, function(error)
+                            log(LogLevel.ERROR, "Failed spawning vehicle: %s", error)
+                        end, spawnState.def.vehicleHash, spawnState.def.x, spawnState.def.y, spawnState.def.z, spawnState.def.heading)
+                    end
+                end
+            end
+        end
+    end, function(error)
+        log(LogLevel.ERROR, "Failed checking occupation: %s", error)
+    end, spawnState.def.x, spawnState.def.y, spawnState.def.z, spawnState.def.occupationRadius * 1.0)
+end
+
+function loadDefinitions()
+    for i = 1, #SpawnDefinitions do
+        processDefinition(SpawnDefinitions[i])
     end
 end
 
-function StartScheduledCheck()
+function startScheduledCheck()
     Citizen.CreateThread(function()
+        log(LogLevel.DEBUG, "Check interval set to %s seconds", CHECK_INTERVAL / 1000)
         while true do
-            for i = 1, #spawnedCarMap do
-                local spawnData = spawnedCarMap[i]
-                log(TRACE, "Checking " .. spawnData.definition.vehicleName)
-                CheckSpawn(spawnData)
+            for i = 1, #spawnStates do
+                local state = spawnStates[i]
+                checkSpawn(state)
             end
-            Citizen.Wait(1000)
+            Citizen.Wait(CHECK_INTERVAL)
         end
     end)
 end
 
-AddEventHandler("carspawner:vehicleOccupationCheckResult", function(handle, occupied)
-    if pendingRequests[handle] == nil then
-        log(DEBUG, "Received an unexpected handle in result: " .. tostring(handle) .. ". Discarding it.")
+function performRpcCall(client, rpcName, successCallback, failureCallback, ...)
+    if client == nil then
+        log(LogLevel.ERROR, "Cannot perform RPC call because client is nil. rpcName = %s", rpcName)
         return
     end
+    local handle = newHandle()
+    log(LogLevel.TRACE, "Invoking RPC call to client: handle = %s, client = %s, rpcName = %s, args = %s", handle, client, rpcName, dump({ ... }))
+    TriggerClientEvent("carspawner:rpc", client, handle, rpcName, { ... })
+    pendingRequests[handle] = { type = RequestType.RpcCall, successCallback = successCallback, failureCallback = failureCallback }
+end
 
-    local spawnData = pendingRequests[handle].spawnData
-    log(DEBUG, "Received check result for vehicle " .. spawnData.definition.vehicleName .. " and occupied: " .. tostring(occupied))
-    spawnData.hasPendingCheck = false
-    pendingRequests[handle] = nil
-    if occupied then
-        spawnData.isVehicleDisplaced = false
-        spawnData.displacedTimestamp = nil
-    else
-        if not spawnData.isVehicleDisplaced then
-            spawnData.isVehicleDisplaced = true
-            spawnData.displacedTimestamp = getTime()
-            log(DEBUG, "Vehicle " .. spawnData.definition.vehicleName .. " displaced on " .. spawnData.displacedTimestamp)
-        end
+function performVoidRpcCall(client, rpcName, ...)
+    if client == nil then
+        log(LogLevel.ERROR, "Cannot perform RPC call because client is nil. rpcName = %s", rpcName)
+        return
     end
-end)
+    local handle = newHandle()
+    log(LogLevel.TRACE, "Invoking RPC call to client: handle = %s, client = %s, rpcName = %s, args = %s", handle, client, rpcName, dump({ ... }))
+    TriggerClientEvent("carspawner:rpc", client, handle, rpcName, { ... })
+    pendingRequests[handle] = { type = RequestType.RpcCall }
+end
+
+function mod(modifier, ...)
+    performRpcCall(chosenUserForSpawning, modifier.rpcName, function(data)
+        log(LogLevel.DEBUG, "Modification (%s) to vehicle was successful. Data = %s", modifier.rpcName, dump(data))
+    end, function(error)
+        log(LogLevel.ERROR, "Failed modifying car: %s", error)
+    end, ...)
+end
 
 AddEventHandler('playerConnected', function()
     local player = source
-    log(DEBUG, "Player with ID " .. player .. " connected.")
+    log(LogLevel.DEBUG, "Player with ID " .. player .. " connected.")
     players[player] = true
-    --if chosenUserForSpawning == nil then
+    if chosenUserForSpawning == nil then
         selectPlayer()
-    --end
+    end
 
     if not hasLoaded then
         log(LogLevel.DEBUG, "Initializing spawns upon first player connect")
         hasLoaded = true
         loadDefinitions()
-        StartScheduledCheck()
+        startScheduledCheck()
     end
 end)
-AddEventHandler('playerDropped', function(player)
-    log(DEBUG, "Player with ID " .. player .. " disconnected.")
+AddEventHandler('playerDropped', function(reason)
+    local player = source
+    log(LogLevel.DEBUG, "Player with ID " .. player .. " disconnected.")
     players[player] = nil
     selectPlayer()
 end)
